@@ -1,0 +1,472 @@
+package ru.ostrov77.factions.trade;
+
+import java.util.Arrays;
+import java.util.List;
+import java.util.ArrayList;
+import org.bukkit.inventory.InventoryView;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.Material;
+import org.bukkit.Bukkit;
+import org.bukkit.Sound;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.entity.Player;
+import ru.komiss77.ApiOstrov;
+import ru.komiss77.utils.ItemBuilder;
+import ru.ostrov77.factions.Main;
+
+
+
+
+
+public final class TradeInventory {
+    
+    private String sender;
+    private String receiver;
+    
+    private final Inventory senderInventory;
+    private final Inventory receiverInventory;
+    
+    private boolean readySend = false; //отправляющий согласен
+    private boolean readyRec = false; //принимающий согласен
+    
+    private boolean complete = false;
+    //private boolean closed = false;
+    //private int singleClose;
+    //private final Set<String> closedPlayers;
+    
+    public TradeInventory(final Player sender, final Player receiver) {
+
+        this.sender = sender.getName();
+        this.receiver = receiver.getName();
+
+        senderInventory = Bukkit.createInventory(sender, 54, "§1      Вы        < - >   Другой");
+        receiverInventory = Bukkit.createInventory(receiver, 54, "§1      Вы        < - >   Другой");
+        final List<Integer> wallSlots = Arrays.asList(4, 13, 22, 31, 40, 49);
+
+        for (final int wallSlot : wallSlots) {
+            senderInventory.setItem(wallSlot, new ItemBuilder(Material.BLACK_STAINED_GLASS_PANE).build() );
+            receiverInventory.setItem(wallSlot, new ItemBuilder(Material.BLACK_STAINED_GLASS_PANE).build() );
+        }
+        senderInventory.setItem(47, new ItemBuilder(Material.LIGHT_GRAY_STAINED_GLASS_PANE).name(".").build() );
+        senderInventory.setItem(48, TradeListener.wait );
+        senderInventory.setItem(50, TradeListener.wait );
+        senderInventory.setItem(45, TradeListener.yes );
+        senderInventory.setItem(46, TradeListener.no );
+        sender.openInventory(senderInventory);
+
+        receiverInventory.setItem(47, new ItemBuilder(Material.LIGHT_GRAY_STAINED_GLASS_PANE).name(".").build() );
+        receiverInventory.setItem(48, TradeListener.wait );
+        receiverInventory.setItem(50, TradeListener.wait );
+        receiverInventory.setItem(45, TradeListener.yes );
+        receiverInventory.setItem(46, TradeListener.no );
+        receiver.openInventory(receiverInventory);
+    }
+    
+
+    
+    public void completeTrade() {
+        
+        if (complete || !readySend || !readyRec) return; //защитка от дребезга
+        readySend = false;
+        readyRec = false;
+        complete = true;
+        
+        Player p = Bukkit.getPlayer(sender);
+        if (p!=null) {
+            p.closeInventory();
+            p.getWorld().playSound(p.getLocation(), Sound.BLOCK_CHAIN_BREAK, 2, 0.5f);
+            p.sendMessage("§2*Звон лони, торговец потирает руки.");
+            giveItems(p, true);
+        }
+        p = Bukkit.getPlayer(receiver);
+        if (p!=null) {
+            p.closeInventory();
+            p.getWorld().playSound(p.getLocation(), Sound.BLOCK_CHAIN_BREAK, 2, 0.5f);
+            p.sendMessage("§2*Звон лони, торговец потирает руки.");
+            giveItems(p, true);
+        }
+        readySend = false;
+        readyRec = false;
+        
+        ApiOstrov.moneyChange(receiver, -100, "Оплата услуг торговца");//fp1.stars--;
+        ApiOstrov.moneyChange(sender, -100, "Оплата услуг торговца");//fp2.stars--;
+        
+        
+    }
+    
+    
+    
+
+    
+
+    
+    public void giveItems(final Player p, final boolean opposite) { //получить вещи из своего
+        final List<ItemStack> itemStackList = new ArrayList<>();
+        
+        if (p.getName().equals(opposite ? receiver : sender)) {
+            TradeListener.activeSlots.forEach((slot) -> {
+                if (senderInventory.getItem(slot)!=null) itemStackList.add(senderInventory.getItem(slot));
+            });
+        } else if (p.getName().equals(opposite ? sender : receiver)) {
+            TradeListener.activeSlots.forEach((slot) -> {
+                if (receiverInventory.getItem(slot)!=null)  itemStackList.add(receiverInventory.getItem(slot));
+            });
+        }
+        
+        final ItemStack[] give = new ItemStack[itemStackList.size()];
+        int i=0;
+        for (final ItemStack is : itemStackList) {
+            give[i] = is;
+            i++;
+        }
+        
+        p.getInventory().addItem(give).values().forEach((is) -> { //бросаем невлезшее
+             if (is != null) p.getLocation().getWorld().dropItem(p.getLocation(), is);
+        });
+
+    }
+    
+    
+    
+
+    
+    //проверить!
+    public void onClose(final Player p) {
+        if (complete) { //только если закрывают, не выполнив обмен
+            return;
+        }
+        //complete = true; //чтобы когда закроем второго участника, не зациклилось
+        Player other = null;
+        if (p.getName().equals(sender)) {
+            other = Bukkit.getPlayer(receiver);
+            
+        } else if (p.getName().equals(receiver)) {
+            other = Bukkit.getPlayer(sender);
+           
+        }
+        if (other!=null) {
+            final InventoryView view = other.getOpenInventory();
+            Main.sync(()-> {
+                if (view != null)  view.close();
+            }, 5); //с задержкой, чтобы onClose не вызвалось повторно!
+            //if (view != null)  view.close(); //просто закрываем, при его закрытии этот метод вызовется с другим именем
+            other.sendMessage("§cИнвентарь закрыт,обмен отменен!");
+            giveItems(other, false);
+        }
+        
+        p.sendMessage("§cИнвентарь закрыт,обмен отменен!");
+        p.getWorld().playSound(p.getLocation(), Sound.BLOCK_ENDER_CHEST_CLOSE, 1, 0.5f);
+        giveItems(p, false);
+        
+        receiver = ""; //после giveItems!!! там проверяет по нику!
+        sender = ""; //сбрасываем, чтобы когда закроем второго участника, не зациклилось
+    }
+    
+    
+
+
+ 
+
+    protected void setWait(final Player p) {
+        if (p.getName().equals(sender) && readySend) { //отправитель изменил предложение и перед этим был готов
+            senderInventory.setItem(48, TradeListener.wait ); //первому  зажигаем серый справа
+            receiverInventory.setItem(50, TradeListener.wait ); //второму зажигаем серый слева
+            readySend = false; //отправитель не готов
+            p.updateInventory();
+            updViews(receiver);
+        } else if (p.getName().equals(receiver) && readyRec) { //получатель изменил предложение  и перед этим был готов
+            senderInventory.setItem(50, TradeListener.wait ); //первому  зажигаем серый справа
+            receiverInventory.setItem(48, TradeListener.wait ); //второму зажигаем серый слева
+            readyRec = false; //получатель не готов
+            p.updateInventory();
+            updViews(sender);
+        }
+    }
+
+    protected void sendReady(final String name) {
+        if (name.equals(sender)) { //отправитель нажал готовность
+            if (readyRec) { //если была готовность получателя - обмен
+                readySend = true;
+                completeTrade();
+            } else if (!readySend) { //перед этим был НЕ готов
+                senderInventory.setItem(48, TradeListener.ready ); //первому  зажигаем зелёный справа
+                receiverInventory.setItem(50, TradeListener.ready ); //второму зажигаем зелёный слева
+                readySend = true; //отправитель не готов
+                //updViews();
+            }
+        } else if (name.equals(receiver)  && !readyRec) { //получатель нажал готовность  и перед этим был НЕ готов
+            if (readySend) { //если была готовность отправителя - обмен
+                readyRec = true;
+                completeTrade();
+            } else if (!readyRec) { //перед этим был НЕ готов
+                senderInventory.setItem(50, TradeListener.ready ); //первому  зажигаем зелёный справа
+                receiverInventory.setItem(48, TradeListener.ready ); //второму зажигаем зелёный слева
+                readyRec = true; //получатель не готов
+                //updViews();
+            }
+        }
+        
+    }
+
+    protected void setDeny(final String name) {
+        if (name.equals(sender)) { //отправитель нажал не устраивает (готовность не проверяем, может просто сказать что не устраивает)
+            senderInventory.setItem(48, TradeListener.notReady ); //первому  зажигаем красный справа
+            receiverInventory.setItem(50, TradeListener.notReady ); //второму зажигаем красный слева
+            readySend = false; //отправитель не готов
+            //updViews();
+        } else if (name.equals(receiver)) { //получатель нажал не устраивает  (готовность не проверяем, может просто сказать что не устраивает)
+            senderInventory.setItem(50, TradeListener.notReady ); //первому  зажигаем красный справа
+            receiverInventory.setItem(48, TradeListener.notReady ); //второму зажигаем красный слева
+            readyRec = false; //получатель не готов
+            //updViews();
+        }
+    }
+
+
+    
+    
+    
+
+    private void updViews(final String name) {
+        if (Bukkit.getPlayer(name)!=null) Bukkit.getPlayer(name).updateInventory();
+    }
+
+    protected void syncWiev(final String name, final int slot) {
+        if (name.equals(sender)) {
+            Main.sync(()->{
+                if (Bukkit.getPlayer(receiver)!=null) {
+                    for (int i : TradeListener.activeSlots) {
+                        receiverInventory.setItem( i+5, senderInventory.getItem(i));
+                    }
+                    Bukkit.getPlayer(receiver).updateInventory();
+                }
+                //receiverInventory.setItem( slot+5, senderInventory.getItem(slot));
+            }, 5);
+        } else if (name.equals(receiver)) {
+            Main.sync(()->{
+                if (Bukkit.getPlayer(sender)!=null) {
+                    for (int i : TradeListener.activeSlots) {
+                        senderInventory.setItem( i+5, receiverInventory.getItem(i));
+                    }
+                    Bukkit.getPlayer(sender).updateInventory();
+                }
+                //senderInventory.setItem( slot+5, senderInventory.getItem(slot));
+            }, 5);
+        }
+    }
+    
+
+
+    public Inventory getInventory(final Inventory clickedInventory) {
+        if (clickedInventory.equals(senderInventory)) {
+            return receiverInventory;
+        }
+        if (clickedInventory.equals(receiverInventory)) {
+            return senderInventory;
+        }
+        return null;
+    }
+    
+    public boolean isInventory(final Inventory inventory) {
+        return inventory.equals(senderInventory) || inventory.equals(receiverInventory);
+    }
+   
+
+
+    public String getSender() {
+        return sender;
+    }
+    
+    public String getReceiver() {
+        return receiver;
+    }
+    
+    public boolean getReadySend() {
+        return readySend;
+    }
+    
+    public boolean getReadyRec() {
+        return readyRec;
+    }
+    
+    public void setReadySend(final boolean ready) {
+        readySend = ready;
+    }
+    
+    public void setReadyRec(final boolean ready) {
+        readyRec = ready;
+    }
+    
+
+
+
+    
+    
+    
+    
+    
+    
+    
+    /*public void giveItemsBack(final Player p) { //закрытие без обмена
+        
+        final List<ItemStack> senderItems = getYouItems(p.getName());
+        final List<ItemStack> senderDropItems = new ArrayList<>();
+        for (final ItemStack senderItem : senderItems) {
+            if (senderItem != null) {
+                for (final ItemStack itemStack : p.getInventory().addItem(new ItemStack[] { senderItem }).values()) {
+                    senderDropItems.add(itemStack);
+                }
+            }
+        }
+        for (final ItemStack dropSenderItem : senderDropItems) {
+            if (dropSenderItem != null) {
+                p.getLocation().getWorld().dropItem(p.getLocation(), dropSenderItem);
+            }
+        }
+
+    }*/
+    
+   /* public List<ItemStack> getItems(final String name) { //получить вещи из своего
+        final List<ItemStack> itemStackList = new ArrayList<>();
+        if (name.equals(sender)) {
+            for (final int slot : TradeListener.youSlots) {
+                itemStackList.add(senderInventory.getItem(slot));
+            }
+        } else if (name.equals(receiver)) {
+            for (final int slot : TradeListener.youSlots) {
+                itemStackList.add(receiverInventory.getItem(slot));
+            }
+        }
+        return itemStackList;
+    }
+    
+    public List<ItemStack> getOtherItems(final String name) { //получить вещи из инвентаря другого
+        final List<ItemStack> itemStackList = new ArrayList<>();
+        if (name.equals(sender)) {
+            for (final int slot : TradeListener.youSlots) {
+                itemStackList.add(senderInventory.getItem(slot+5));
+            }
+        } else if (name.equals(receiver)) {
+            for (final int slot : TradeListener.youSlots) {
+                itemStackList.add(receiverInventory.getItem(slot+5));
+            }
+        }
+        return itemStackList;
+    }*/    
+    
+    
+    
+   /* public void giveTradeItems(final Player p) {
+
+        if (p.getName().equals(sender)) {
+            final List<ItemStack> senderItems = getOtherItems(sender);
+            final List<ItemStack> senderDropItems = new ArrayList<>();
+            for (final ItemStack senderItem : senderItems) {
+                if (senderItem != null) {
+                    for (final ItemStack itemStack : p.getInventory().addItem(new ItemStack[] { senderItem }).values()) {
+                    //for (final ItemStack itemStack : getSender().getInventory().addItem(new ItemStack[] { senderItem }).values()) {
+                        if (itemStack != null) {
+                            senderDropItems.add(itemStack);
+                        }
+                    }
+                }
+            }
+            for (final ItemStack dropSenderItem : senderDropItems) {
+                if (dropSenderItem != null) {
+                    //getSender().getLocation().getWorld().dropItem(getSender().getLocation(), dropSenderItem);
+                    p.getLocation().getWorld().dropItem(p.getLocation(), dropSenderItem);
+                }
+            }
+        } else if (p.getName().equals(receiver)) {
+        //if (getReceiver().getUniqueId().toString().equals(player.getUniqueId().toString())) {
+            final List<ItemStack> receiverItems = getOtherItems(getReceiver());
+            final List<ItemStack> receiverDropItems = new ArrayList<>();
+            for (final ItemStack receiverItem : receiverItems) {
+                if (receiverItem != null) {
+                    for (final ItemStack itemStack : p.getInventory().addItem(new ItemStack[] { receiverItem }).values()) {
+                    //for (final ItemStack itemStack : getReceiver().getInventory().addItem(new ItemStack[] { receiverItem }).values()) {
+                        if (itemStack != null) {
+                            receiverDropItems.add(itemStack);
+                        }
+                    }
+                }
+            }
+            for (final ItemStack dropReceiverItem : receiverDropItems) {
+                if (dropReceiverItem != null) {
+                    p.getLocation().getWorld().dropItem(p.getLocation(), dropReceiverItem);
+                    //getReceiver().getLocation().getWorld().dropItem(getReceiver().getLocation(), dropReceiverItem);
+                }
+            }
+        }
+    }*/
+
+
+    /*
+    public void updateSlots(final Inventory clickedInventory, final Inventory inventory) {
+        //youSlots = Arrays.asList(0, 1, 2, 3, 9, 10, 11, 12, 18, 19, 20, 21, 27, 28, 29, 30, 36, 37, 38, 39);
+        //otherSlots = Arrays.asList(5, 6, 7, 8, 14, 15, 16, 17, 23, 24, 25, 26, 32, 33, 34, 35, 41, 42, 43, 44);
+        final Map<Integer, ItemStack> youItems = new HashMap<>();
+        for (final int youId : TradeListener.youSlots) {
+            final ItemStack itemStack = clickedInventory.getItem(youId);
+            if (itemStack != null && itemStack.getType() != Material.AIR) {
+                youItems.put(youId, itemStack);
+            }
+        }
+        for (final int otherId : TradeListener.otherSlots) {
+            inventory.clear(otherId);
+        }
+        for (final int youId : TradeListener.youSlots) {
+            if (youItems.containsKey(youId)) {
+                inventory.setItem(youId + 5, youItems.get(youId));
+            }
+       }
+    }
+    */ 
+    /*
+    public void setItem(final int slot, final String name) {
+        if (isFinished()) {
+            return;
+        }
+        //if (player.getUniqueId().toString().equals(getSender().getUniqueId().toString())) {
+        if (name.equals(sender)) {
+            if (slot == 45) { //первый жмёт да
+                senderInventory.setItem(48, TradeListener.ready );  //первому  зажигаем зелёный слева
+                receiverInventory.setItem(50, TradeListener.ready ); //второму зажигаем зелёный справа
+                readySend = true;
+                if ( ItemUtils.compareItem(senderInventory.getItem(48), TradeListener.ready, false) &&
+                        //senderInventory.getItem(50).equals((Object)new ItemBuilder(Material.LIME_DYE).name("§aНажмите , если готовы к обмену!").build() )) {
+                        ItemUtils.compareItem(senderInventory.getItem(50), TradeListener.ready, false) ) {
+                    setFinished();
+                }
+            }
+            if (slot == 46) { //первый жмёт нет
+                senderInventory.setItem(48, TradeListener.notReady );  //первому  зажигаем красный слева
+                receiverInventory.setItem(50, TradeListener.notReady ); //второму зажигаем красный справа
+                readySend = false;
+            }
+        } else if (name.equals(receiver)) {
+        //if (player.getUniqueId().toString().equals(getReceiver().getUniqueId().toString())) {
+            if (slot == 45) { //второй жмёт да
+                senderInventory.setItem(50, TradeListener.ready ); //первому  зажигаем зелёный справа
+                receiverInventory.setItem(48, TradeListener.ready ); //второму зажигаем зелёный слева
+                readyRec = true;
+                if ( ItemUtils.compareItem(receiverInventory.getItem(48), TradeListener.ready, false) &&
+                        ItemUtils.compareItem(receiverInventory.getItem(50), TradeListener.ready, false) ) {
+                    setFinished();
+                }               
+            }
+            if (slot == 46) { //второй жмёт нет
+                senderInventory.setItem(50, TradeListener.notReady ); //первому  зажигаем красный справа
+                receiverInventory.setItem(48, TradeListener.notReady ); //второму зажигаем красный слева
+                readyRec = false;
+            }
+        }
+    }*/
+    
+    
+    
+    
+    
+    
+    
+}
