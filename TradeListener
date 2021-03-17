@@ -1,0 +1,584 @@
+package ru.ostrov77.factions.trade;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import org.bukkit.Bukkit;
+import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.Sound;
+import org.bukkit.entity.EntityType;
+import org.bukkit.entity.Player;
+import org.bukkit.event.Event;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.InventoryAction;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.inventory.InventoryMoveItemEvent;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.scheduler.BukkitTask;
+import ru.komiss77.ApiOstrov;
+import ru.komiss77.Events.FigureClickEvent;
+import ru.komiss77.Managers.Timer;
+import ru.komiss77.utils.ItemBuilder;
+import ru.komiss77.utils.LocationUtil;
+import ru.ostrov77.factions.FM;
+import ru.ostrov77.factions.Main;
+import ru.ostrov77.factions.objects.Fplayer;
+
+
+
+
+
+
+
+
+
+public class TradeListener implements Listener {
+    
+    private final int minLevel = 25;
+    
+    private BukkitTask tradeTask;
+    private String p1Name = "";
+    private static final List<TradeInventory> tradeInventories = new ArrayList<>();;
+    protected static final List<Integer> activeSlots = Arrays.asList(0, 1, 2, 3, 9, 10, 11, 12, 18, 19, 20, 21, 27, 28, 29, 30, 36, 37, 38, 39);
+    //protected static final List<Integer> otherSlots = Arrays.asList(5, 6, 7, 8, 14, 15, 16, 17, 23, 24, 25, 26, 32, 33, 34, 35, 41, 42, 43, 44);
+    
+    protected static final ItemStack yes = new ItemBuilder(Material.GREEN_WOOL).name("§aПредложение устраивает.").build();
+    protected static final ItemStack no = new ItemBuilder(Material.RED_WOOL).name("§4Неинтересно.").build();
+    
+    protected static final ItemStack wait = new ItemBuilder(Material.GRAY_DYE).name("§7Ждём предложение.").build();
+    protected static final ItemStack ready = new ItemBuilder(Material.LIME_DYE).name("§2Предложение сделано").build();
+    protected static final ItemStack notReady = new ItemBuilder(Material.RED_DYE).name("§4Не устраивает.").build();
+    
+    protected static final ItemStack done = new ItemBuilder(Material.LIGHT_BLUE_DYE).name("§b > Обмен выполнен <").build();
+    
+    
+    public TradeListener() {
+        //tradeInventories 
+    }
+    
+    
+    //NoSelfTrade + оба на одном острове
+    //MinLevel
+    //разница уровней
+    
+    @EventHandler(  priority = EventPriority.MONITOR, ignoreCancelled = true) 
+    public void onTrade(FigureClickEvent e) { 
+        if (!e.getFigureName().toLowerCase().contains("торговец")) return;//сработает только при клике на торговца
+//System.out.println(" ++++ FigureClickEvent "+e.getFigureName());
+        final Location traderLocation = e.getFigureLocation();
+        final Player p2 = e.getPlayer();
+        
+        //NoSelfTrade
+        if (p1Name.equals(p2.getName())) { 
+            p2.sendMessage("§eТорговец ждёт второго участника..");
+            return;
+        }
+        
+        final Fplayer fp2 = FM.getFplayer(p2);
+
+        if (fp2==null) {
+            p2.sendMessage("§cКакое-то недоразумение.. Вас тут вообще не должно быть..");
+            return;
+        }
+        if (ApiOstrov.moneyGetBalance(p2.getName())<100 ) { //if (fp2.stars<1 && (f2!=null && f2.settings.stars<1)) {
+            p2.sendMessage("§eО милосердый, торговец несёт налоговое бремя, а у Вас нет хотя бы 100 лони для оплаты сделки..");
+            return;
+        }
+        
+        if (p1Name.isEmpty()) { //первый участник
+            
+            p2.sendMessage("§aТорговец приветствует Вас, кто же второй участник обмена??");
+            p1Name = p2.getName();
+            
+            tradeTask = new BukkitRunnable() {
+                private int sec = 5;
+
+                @Override
+                public void run() {
+                    if ( p2==null || 
+                        !p2.isOnline() ||
+                        p2.isDead() ||
+                        !p2.getWorld().getName().equals(traderLocation.getWorld().getName()) ||
+                        LocationUtil.getDistance(p2.getLocation(), traderLocation) > 30
+                    ) {
+                        reset();
+                        return;
+                    }
+
+
+                    sec--;
+                    if (sec==0) {
+                        ApiOstrov.sendActionBarDirect(p2, "§cВторой участник не нашелся, торговец отменил сделку.");
+                        reset();
+                        return;
+                    }
+                    ApiOstrov.sendActionBarDirect(p2, "§eЖдём второго участника обмена §7: §f"+sec);
+                }
+
+                private void reset() {
+                    this.cancel();
+                    p1Name = "";
+                }
+
+            }.runTaskTimer(Main.plugin, 1, 20);
+
+            
+            
+        } else {
+            
+            //сюда заходит при клике второго участника, тогда р=участник 2, p1Name=участник 1
+            final Player p1 = Bukkit.getPlayer(p1Name); //первый участник
+            
+            if (p1==null || LocationUtil.getDistance(p1.getLocation(), traderLocation)>30) {
+                p2.sendMessage("§eГде же первый участник??..");
+                resetTrade();
+                return;
+            }
+            
+            final Fplayer fp1 = FM.getFplayer(p1.getName());
+            if (fp1==null) {
+                p2.sendMessage("§cКакое-то недоразумение.. Первый участник баг?"); //если что-то изменилось по 1 участнику
+                resetTrade();
+                return;
+            }
+            //тут имеем 1)p2, f2, fp2    2)p1, f1, fp1      ОБА проверены - крац есть (в клане  либо личные). Кланы могуть быть null (дикари)!!
+            
+            if (ApiOstrov.moneyGetBalance(fp1.name)<100 ) { //if (fp1.stars<1 && (f1!=null && f1.settings.stars<1)) {
+                p2.sendMessage("§eО милосердый, торговец несёт налоговое бремя, а у Вас нет хотя бы 100 лони для оплаты сделки..");
+                return;
+            }
+            
+            
+//Bukkit.broadcastMessage("Trade session : "+p1Name+" - "+p.getName());
+            final TradeInventory ti = new TradeInventory(p1, p2);
+            tradeInventories.add(ti);
+            resetTrade();
+            
+        }
+        
+    }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    private void resetTrade() {
+        if (tradeTask!=null) tradeTask.cancel();
+        p1Name="";
+    }
+    
+    
+    
+    
+    private static TradeInventory getTradeInventory(final Player p) {
+        if (tradeInventories.isEmpty()) return null;
+        for (final TradeInventory ti : tradeInventories) {
+            if (ti.getSender().equals(p.getName()) || ti.getReceiver().equals(p.getName())) {
+                return ti;
+            }
+        }
+        return null;
+    }
+
+    
+    
+    
+    
+    
+    
+    @EventHandler (priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void closeInventory(final InventoryCloseEvent e) {
+        final Player player = (Player)e.getPlayer();
+        final TradeInventory ti = getTradeInventory(player);
+        
+        if (ti != null) {
+            //if (ti.isFinished()) {
+               // if (!ti.isClosed(player)) {
+                  //  ti.closeInventory(player);
+                  //  ti.addSingleClose();
+                  //  if (ti.isFullyClosed()) {
+                 //       tradeInventories.remove(ti);
+                //    }
+               // }
+            //} else {
+                ti.onClose(player);
+                tradeInventories.remove(ti);
+           // }
+        }
+    }
+    
+    
+    
+    
+    
+    
+    
+    
+    @EventHandler (priority = EventPriority.LOWEST, ignoreCancelled = true)
+    public void onMove(final InventoryMoveItemEvent e) {
+        //final Inventory clickedInventory = e.getDestination();
+       // TradeInventory ti = null;
+        //if (clickedInventory != null) {
+        if (tradeInventories.isEmpty()) return;
+        for (final TradeInventory ti : tradeInventories) {
+            if (ti.isInventory(e.getDestination())) {
+                //ti = inventory;
+//System.out.println("InventoryDragEvent setCancelled");
+                e.setCancelled(true);
+                return;
+            }
+        }
+        //}
+        //if (ti != null) {
+        //    e.setCancelled(true);
+        //}
+    }
+    
+    
+    
+    
+    
+    
+    @EventHandler (priority = EventPriority.LOWEST, ignoreCancelled = true)
+    public void dragInventory(final InventoryDragEvent e) {
+        if (tradeInventories.isEmpty()) return;
+        if (e.getWhoClicked().getType()!=EntityType.PLAYER) return;
+        final Player p = (Player) e.getWhoClicked();
+        final TradeInventory ti = getTradeInventory(p);
+        if (ti==null) return;
+        //final Inventory clickedInventory = e.getInventory();
+//System.out.println("InventoryDragEvent 1");
+        //TradeInventory ti = null;
+        //if (clickedInventory != null) {
+        //for (final TradeInventory inventory : tradeInventories) {
+        //    if (inventory.isInventory(clickedInventory)) {
+        //        ti = inventory;
+        //    }
+        //}
+
+        //if (ti != null) {
+
+          //  final Set<Integer> slots = (Set<Integer>)e.getRawSlots();
+           // boolean disallowed = false;
+         //   if (ti.isFinished()) {
+         //       for (final Integer slotId : slots) {
+         //           if (youSlots.contains(slotId)) {
+          //              disallowed = true;
+           //         }
+           //     }
+           // } else {
+            if (Timer.CD_has(p.getName(), "trade")) {
+                e.setCancelled(true);
+                e.setResult(Event.Result.DENY);
+                return;
+            }
+            Timer.CD_add(p.getName(), "trade", 1);
+            boolean setWait = false;
+            boolean canceled = false;
+
+            for (final int slot : activeSlots) {
+                if (!canceled) {
+                    if (e.getRawSlots().contains(slot+5) || e.getRawSlots().contains(48) || e.getRawSlots().contains(50)) {
+                        canceled = true;
+                    }
+                }
+                if (!setWait && e.getRawSlots().contains(slot)) {
+                    setWait = true;
+                }
+            }
+
+            if (canceled) {
+                e.setCancelled(true);
+                e.setResult(Event.Result.DENY);
+            }
+
+            if (setWait) {
+                ti.setWait(p);
+            }
+            //}
+          /*  if (disallowed) {
+                e.setCancelled(true);
+                e.setResult(Event.Result.DENY);
+System.out.println("InventoryDragEvent DENY 1");
+                FM.soundDeny(p);
+                return;
+            }
+            
+            p.playSound(p.getLocation(), Sound.BLOCK_COMPARATOR_CLICK, 1, 1);
+            //final int playerMinId = 54;
+            //final int playerMaxId = 89;
+            boolean playerInventory = false;
+            boolean foundNonItem = false;
+            for (final int id : slots) {
+                if (id >= 54 && id <= 89) {
+                    if (foundNonItem) {
+                        continue;
+                    }
+                    playerInventory = true;
+                } else {
+                    playerInventory = false;
+                    foundNonItem = true;
+                }
+            }
+            if (playerInventory) {
+                return;
+            }
+            e.setCancelled(true);
+            e.setResult(Event.Result.DENY);
+System.out.println("InventoryDragEvent DENY 2");
+            for (final int slotId2 : slots) {
+                if (ti.isFinished()) {
+                    if (!otherSlots.contains(slotId2) || clickedInventory.getItem(slotId2) == null) {
+                        continue;
+                    }
+                    if (clickedInventory.getItem(slotId2).getType() == Material.AIR) {
+                        continue;
+                    }
+                    e.setCancelled(false);
+                    e.setResult(Event.Result.ALLOW);
+                    new BukkitRunnable() {
+                        @Override
+                        public void run() {
+                            TradeInventory ti = null;
+                            for (final TradeInventory inventory : tradeInventories) {
+                                if (inventory.isInventory(clickedInventory)) {
+                                    ti = inventory;
+                                }
+                            }
+                            if (ti != null) {
+                                ti.updateSlots(clickedInventory, ti.getInventory(clickedInventory));
+                            }
+                        }
+                    }.runTaskLater(Main.plugin, 10L);
+
+                } else {
+
+                    if (!youSlots.contains(slotId2)) {
+                        continue;
+                    }
+                    e.setCancelled(false);
+                    e.setResult(Event.Result.ALLOW);
+                    new BukkitRunnable() {
+                        @Override
+                        public void run() {
+                            TradeInventory ti = null;
+                            for (final TradeInventory inventory : tradeInventories) {
+                                if (inventory.isInventory(clickedInventory)) {
+                                    ti = inventory;
+                                }
+                            }
+                            if (ti != null) {
+                                ti.updateSlots(clickedInventory, ti.getInventory(clickedInventory));
+                            }
+                        }
+                    }.runTaskLater(Main.plugin, 10L);
+                }
+            }*/
+       // }
+       // }
+        //}
+    }
+    
+    
+    
+    
+    
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
+    public void clickInventory(final InventoryClickEvent e) {
+        if (tradeInventories.isEmpty()) return;
+        if (e.getWhoClicked().getType()!=EntityType.PLAYER) return;
+        final Player p = (Player) e.getWhoClicked();
+        final TradeInventory ti = getTradeInventory(p);
+        if (ti==null) return;
+        //final Inventory clickedInventory = e.getInventory();
+        
+        //if (e.getWhoClicked() instanceof Player) {
+            //final Player player = (Player)e.getWhoClicked();
+            //final TradeInventory ti = getTradeInventory(player);
+            
+            if ( e.getAction() == InventoryAction.COLLECT_TO_CURSOR) {
+                e.setCancelled(true);
+                e.setResult(Event.Result.DENY);
+                //FM.soundDeny(p);
+            }
+            if (Timer.CD_has(p.getName(), "trade")) {
+                e.setCancelled(true);
+                e.setResult(Event.Result.DENY);
+                p.sendMessage("§eТорговец не успевает следить за руками, пожалуйста, помедленее!");
+                return;
+            }
+            Timer.CD_add(p.getName(), "trade", 1);
+            
+            //TradeInventory ti = null;
+            //final Inventory clickedInventory = e.getClickedInventory();
+            
+            //if (clickedInventory != null) {
+//System.out.println("ru.ostrov77.factions.trade.TradeListener.clickInventory()");
+                p.playSound(p.getLocation(), Sound.BLOCK_BAMBOO_PLACE, 1, 1);
+                final int slotId = e.getSlot();
+                final int rawSlot = e.getRawSlot();
+//System.out.println("InventoryClickEvent slotId="+slotId+" rawSlot="+rawSlot+" action="+e.getAction());
+                
+                if (slotId==rawSlot) { //все клики в верхней части
+                    if (activeSlots.contains(slotId)) { //клик на своём поле предложений
+                        //switch (e.getAction()) {
+                            //case 
+                        //}
+                        ti.setWait(p);
+                        ti.syncWiev(p.getName(),slotId);
+                        return;
+                    }
+                    
+                    e.setCancelled(true);
+                    e.setResult(Event.Result.DENY);
+                    
+                    if (slotId==45) { //да
+                        ti.sendReady(p.getName());
+                    } else if (slotId==46) { //нет
+                        ti.setDeny(p.getName());
+                    }
+                }
+                //for (final TradeInventory inventory2 : tradeInventories) {
+                    //if (inventory2.isInventory(clickedInventory)) {
+                      /*  if (p.getName().equals(ti.getSender())) {
+                            if (ti.getReadySend() && slotId != 46) {
+                                e.setCancelled(true);
+                                e.setResult(Event.Result.DENY);
+ System.out.println("InventoryClickEvent DENY 2");
+                               return;
+                            }
+                            if (ti.getReadyRec() && youSlots.contains(slotId) ) {
+                                ti.setItem(46, ti.getReceiver());
+                                e.setCancelled(true);
+                                e.setResult(Event.Result.DENY);
+ System.out.println("InventoryClickEvent DENY 3");
+                            }
+                        } else  if (p.getName().equals(ti.getReceiver())) {
+                        //if (player.getUniqueId().toString().equals(inventory2.getReceiver().getUniqueId().toString())) {
+                            if (ti.getReadyRec() && slotId != 46) {
+                                e.setCancelled(true);
+                                e.setResult(Event.Result.DENY);
+ System.out.println("InventoryClickEvent DENY 4");
+                                return;
+                            }
+                            if (youSlots.contains(slotId) && ti.getReadySend()) {
+                                ti.setItem(46, ti.getSender());
+                                e.setCancelled(true);
+                                e.setResult(Event.Result.DENY);
+ System.out.println("InventoryClickEvent DENY 5");
+                            }
+                        }*/
+                        //ti = inventory2;
+                    //}
+                //}
+            //}
+            //if (ti == null) {
+                //final Inventory inventory3 = e.getInventory();
+               // if (clickedInventory != null) {
+                    //TradeInventory tiValue = null;
+                    //for (final TradeInventory tiCopy : tradeInventories) {
+                    //    if (tiCopy.isInventory(clickedInventory)) {
+                    //        tiValue = tiCopy;
+                    //    }
+                    //}
+                    //if (tiValue != null && e.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY) {
+                    //    e.setCancelled(true);
+                    //    e.setResult(Event.Result.DENY);
+                    //    return;
+                    //}
+                //}
+            //}
+            //if (ti != null) {
+            /*    boolean performed = false;
+ System.out.println("rawSlot="+rawSlot+" perform?"+(youSlots.contains(rawSlot)));
+                
+                if (ti.isFinished()) {
+ System.out.println("isFinished");
+                    if (otherSlots.contains(rawSlot) && clickedInventory.getItem(rawSlot) != null && clickedInventory.getItem(rawSlot).getType() != Material.AIR) {
+                       // if (clickedInventory.getItem(rawSlot) != null) {
+                        //    if (clickedInventory.getItem(rawSlot).getType() != Material.AIR) {
+                                performed = true;
+                                new BukkitRunnable() {
+                                    @Override
+                                    public void run() {
+                                        TradeInventory ti = null;
+                                        for (final TradeInventory inventory : tradeInventories) {
+                                            if (inventory.isInventory(clickedInventory)) {
+                                                ti = inventory;
+                                            }
+                                        }
+                                        if (ti != null && clickedInventory.getItem(rawSlot) != null && clickedInventory.getItem(rawSlot).getType() != Material.AIR) {
+                                            ti.updateSlots(clickedInventory, ti.getInventory(clickedInventory));
+                                        }
+                                    }
+                                }.runTaskLater(Main.plugin, 10L);
+                      //      } else {
+                      //          e.setCancelled(true);
+                      //          e.setResult(Event.Result.DENY);
+                      //      }
+                      //  } else {
+                       //     e.setCancelled(true);
+                       //     e.setResult(Event.Result.DENY);
+                       // }
+                    } else {
+                        e.setCancelled(true);
+                        e.setResult(Event.Result.DENY);
+ System.out.println("InventoryClickEvent DENY 6");
+                    }
+                    
+                } else if (youSlots.contains(rawSlot)) {
+ System.out.println("ti.getYouSlots().contains(rawSlot)");
+                    performed = true;
+                    
+                    new BukkitRunnable() {
+                        @Override
+                        public void run() {
+                            //TradeInventory ti = null;
+                            //for (final TradeInventory inventory : tradeInventories) {
+                            //    if (inventory.isInventory(clickedInventory)) {
+                           //         ti = inventory;
+                           //     }
+                           // }
+                            if (ti != null) {
+                                ti.updateSlots(clickedInventory, ti.getInventory(clickedInventory));
+                            }
+                        }
+                    }.runTaskLater(Main.plugin, 10L);
+                }
+                
+                if (rawSlot == 45 || rawSlot == 46) {
+                    ti.setItem(e.getSlot(), p.getName());
+                }
+                if (!performed) {
+                    e.setCancelled(true);
+                    e.setResult(Event.Result.DENY);
+ System.out.println("InventoryClickEvent DENY 7");
+                }*/
+            //}
+       // }
+    }
+  
+   
+
+
+
+
+
+
+
+    
+    
+}
